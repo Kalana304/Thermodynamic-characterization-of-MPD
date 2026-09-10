@@ -1,0 +1,21 @@
+seed: 100
+parityfile: data/hamming_7x3.alist
+simname: main_bec
+
+decoder:
+  lmax: 3
+  nprog: 26
+
+simulation:
+  alpha_start: 0.1
+  alpha_end: 1.0
+  alpha_step: 0.1
+
+  eps_start: 0.1
+  eps_end: 1.0
+  eps_step: 0.05
+
+  mmc_iter: 300
+
+system:
+  rootdir: results
