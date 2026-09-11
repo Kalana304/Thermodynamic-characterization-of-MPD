@@ -97,7 +97,7 @@ def parse_opt(cfg_file=None):
     parser.add_argument("--rootdir", type=str, default="results")
 
     parser.add_argument("--lmax", type=int, default=3)
-    parser.add_argument("--nprog", type=int, default=24)
+    parser.add_argument("--nprog", type=int, default=26)
     parser.add_argument("--submatsze", type=int, default=3**11)
 
     parser.add_argument("--alpha_start", type=Range(0,1), default=0.1)
@@ -135,17 +135,24 @@ def augment_args(args):
     args.var2edges = var2edges
     args.check2edges = check2edges
 
-    # --- random params ---
-    args.statelen = n + args.dmax + 7
+    # --- params for main decoder/subroutines ---
+    if "main" in args.simname:
+        args.statelen = n + args.dmax + 7 
+
+        # --- arrays ---
+        args.alpha_arr = np.arange(args.alpha_start, args.alpha_end, args.alpha_step)
+        args.eps_arr = np.arange(args.eps_start, args.eps_end, args.eps_step)
+
+        # --- powers ---
+        args.POW3 = 3 ** np.arange(n, dtype=object)
+        args.POW2 = 2 ** np.arange(n, dtype=object)
+
+    elif "check" in args.simname:
+        args.statelen = 2 * args.dmax + 2 
+    else:
+        args.statelen = 2 * args.dmax + 4    
+
     args.barr = np.arange(args.statelen) + rng.uniform(size=args.statelen)
-
-    # --- arrays ---
-    args.alpha_arr = np.arange(args.alpha_start, args.alpha_end, args.alpha_step)
-    args.eps_arr = np.arange(args.eps_start, args.eps_end, args.eps_step)
-
-    # --- powers ---
-    args.POW3 = 3 ** np.arange(n, dtype=object)
-    args.POW2 = 2 ** np.arange(n, dtype=object)
 
     # --- workers ---
     if args.nworkers is None:
@@ -196,7 +203,7 @@ def init_directory(args):
                 "barr": args.barr
             }
 
-    with open(os.path.join(args.savedir, "params_main.pkl"), "wb") as _file:
+    with open(os.path.join(args.savedir, f"params_{args.simname.split('_')[0]}.pkl"), "wb") as _file:
         pickle.dump(PARAMS, _file)
 
     print(f"Directories are created --> parameters are saved!")

@@ -1,0 +1,12 @@
+seed: 100
+parityfile: data/hamming_7x3.alist
+simname: check_bec
+
+decoder:
+  nprog: 3
+
+simulation:
+  mmc_iter: 30
+
+system:
+  rootdir: results

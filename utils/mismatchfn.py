@@ -72,7 +72,6 @@ def createstatespace(_errfiles, _accesseddict_path, _initdict_path, nworkers):
     return accessed_dict, init_dict
 
 def createstate2idx(_accesseddict, _lookuppath):
-
     if os.path.isfile(_lookuppath):
         print("Lookup table found! Loading hash to state idx...")
         with open(_lookuppath, "rb") as f:
@@ -111,7 +110,6 @@ def creatensplookupdir(state_to_idx, _nsplookuppath):
     if os.path.isfile(_nsplookuppath):
         print("Lookup table for non-special found! Loading hash to state idx...")
         nsp_state2idx = pickle.load(open(_nsplookuppath, "rb"))
-
     else:
         print("Creating lookup table for non-special state var ...")
         nsp_state2idx = {}
@@ -249,8 +247,9 @@ def normalizestochmap(sze, submat_size, _path, _rowsum = None, _normalize = Fals
             n_ent = len(row_sums)
             row_sums_full[i : i + n_ent] += row_sums
 
-    # if not(_normalize):
-    #     row_sums_full[row_sums_full == 0] = 1.0
+    if not(_normalize):
+        row_sums_full[row_sums_full == 0] = 1.0
+
     print(f"min row sum = {np.min(row_sums_full)} and max row sum = {np.max(row_sums_full)}")
     return row_sums_full
 
@@ -270,7 +269,75 @@ def blockprobcompute(prev_dist, _sze, _submat_size, _path):
     
     return post_dist
 
+# partial mmc computation
+def pmmc(alpha, epsilon, _initidx, _nsp_state2idx, _codewords, dirargs, kwargs):
+    ## prior distribution definition
+    if not kwargs.optq0:
+        q0 = (1 / kwargs.sze) * np.ones(kwargs.sze) 
+    else:
+        q0file_ = os.path.join(dirargs.get("savedir"), "q0_main.npz")
 
+        if os.path.isfile(q0file_):
+            print(f"Found optimized q0 --> Loading from {q0file_}...")
+            q0 = np.load(q0file_)["q0_dist"]
+        else:
+            _, q0 = find_q0(
+                            sze = kwargs.sze, _sub_sze = kwargs.kappa, 
+                            matrix_dir = dirargs.get("stochmat_dir"), 
+                            max_iters = kwargs.opt_iter
+                            )
+            np.savez_compressed(os.path.join(dirargs.get("savedir"), 'q0_main.npz'), q0_dist = q0)
+
+    q1 = blockprobcompute(q0, kwargs.sze, kwargs.kappa, dirargs.get("stochmat_dir"))
+
+    ## creating prob distribution induced by the channel
+    p_in_channel = np.zeros(2**kwargs.n)
+    p_in_enc = [alpha, 1 - alpha]
+
+    for h in range(kwargs.n - kwargs.m - 1):
+        p_in_enc = np.outer(p_in_enc, [alpha, 1 - alpha]).flatten(order = 'F')
+
+    p_in_channel[_codewords] = p_in_enc
+    p_y_x = BECChannel(kwargs.n, erasure_prob = epsilon)
+    p_out_channel = p_y_x @ p_in_channel
+
+    # creating prob distribution for non-input state variables (m, mu_0)
+    nin_size = kwargs.dmax + 1
+    p_tnin_decoder = (1 / 3**nin_size)*np.ones(3**nin_size)
+          
+    nspidxlist = defaultdict(list)  # get idxs for each nin var combination for marginalization
+    for _state, _idx in _nsp_state2idx.items():
+        nspidxlist[_state[1:]].append(_idx)
+
+    _p_joint = np.outer(p_out_channel, p_tnin_decoder).flatten(order = "C")
+    p_joint = blockprobcompute(_p_joint, kwargs.nspsze, kwargs.nspkappa, dirargs.get("nspmat_dir"))
+    assert len(p_joint) == 3**(kwargs.n + nin_size), f"sizes do not match :: {len(p_joint)} != {3**(kwargs.n + nin_size)}"
+
+    p_marg_nin = np.zeros(3**nin_size)
+    for ii, (_state, _idx) in enumerate(nspidxlist.items()):
+        p_marg_nin[ii] = np.sum(p_joint[_idx])   
+
+    # initializing distribution
+    p0 = np.zeros(kwargs.sze)
+    p0[_initidx] = np.outer(p_out_channel, p_marg_nin).flatten(order="C")
+    p_prev = p0.copy()
+
+    # computing mismatch cost
+    PMCi = np.zeros(kwargs.mmc_iter)
+
+    tic = time.time()
+    for _n in range(kwargs.mmc_iter):
+        p1 = blockprobcompute(p_prev, kwargs.sze, kwargs.kappa, dirargs.get("stochmat_dir"))
+
+        if (_n % 100 == 0):
+            print(f"Iter {_n} --> Total time elapse: {(time.time() - tic) / 60:.3f} min --> {np.sum(p1)}")
+
+        PMCi[_n] = np.sum(rel_entr(p_prev, q0)) - np.sum(rel_entr(p1, q1))
+        p_prev = p1.copy()
+        
+    filename_ = f"mmc_alpha_{alpha:.2f}_eps_{epsilon:.2f}.npz"
+    np.savez_compressed(os.path.join(dirargs.get('mmc_dir'), filename_), mmc = PMCi) 
+    
 # mismatch cost related misc functions
 def entropy(p):
     p = np.clip(p, 1e-12, 1.0)  # Avoid log(0)
@@ -369,70 +436,3 @@ def BECChannel(n, erasure_prob):
             transition_matrix[i, j] = prob
     return transition_matrix
 
-def pmmc(alpha, epsilon, _initidx, _nsp_state2idx, _codewords, dirargs, kwargs):
-    ## prior distribution definition
-    if not kwargs.optq0:
-        q0 = (1 / kwargs.sze) * np.ones(kwargs.sze) 
-    else:
-        q0file_ = os.path.join(dirargs.get("savedir"), "q0_main.npz")
-
-        if os.path.isfile(q0file_):
-            print(f"Found optimized q0 --> Loading from {q0file_}...")
-            q0 = np.load(q0file_)["q0_dist"]
-        else:
-            _, q0 = find_q0(
-                            sze = kwargs.sze, _sub_sze = kwargs.kappa, 
-                            matrix_dir = dirargs.get("stochmat_dir"), 
-                            max_iters = kwargs.opt_iter
-                            )
-            np.savez_compressed(os.path.join(dirargs.get("savedir"), 'q0_main.npz'), q0_dist = q0)
-
-    q1 = blockprobcompute(q0, kwargs.sze, kwargs.kappa, dirargs.get("stochmat_dir"))
-
-    ## creating prob distribution induced by the channel
-    p_in_channel = np.zeros(2**kwargs.n)
-    p_in_enc = [alpha, 1 - alpha]
-
-    for h in range(kwargs.n - kwargs.m - 1):
-        p_in_enc = np.outer(p_in_enc, [alpha, 1 - alpha]).flatten(order = 'F')
-
-    p_in_channel[_codewords] = p_in_enc
-    p_y_x = BECChannel(kwargs.n, erasure_prob = epsilon)
-    p_out_channel = p_y_x @ p_in_channel
-
-    # creating prob distribution for non-input state variables (m, mu_0)
-    nin_size = kwargs.dmax + 1
-    p_tnin_decoder = (1 / 3**nin_size)*np.ones(3**nin_size)
-          
-    nspidxlist = defaultdict(list)  # get idxs for each nin var combination for marginalization
-    for _state, _idx in _nsp_state2idx.items():
-        nspidxlist[_state[1:]].append(_idx)
-
-    _p_joint = np.outer(p_out_channel, p_tnin_decoder).flatten(order = "C")
-    p_joint = blockprobcompute(_p_joint, kwargs.nspsze, kwargs.nspkappa, dirargs.get("nspmat_dir"))
-    assert len(p_joint) == 3**(kwargs.n + nin_size), f"sizes do not match :: {len(p_joint)} != {3**(kwargs.n + nin_size)}"
-
-    p_marg_nin = np.zeros(3**nin_size)
-    for ii, (_state, _idx) in enumerate(nspidxlist.items()):
-        p_marg_nin[ii] = np.sum(p_joint[_idx])   
-
-    # initializing distribution
-    p0 = np.zeros(kwargs.sze)
-    p0[_initidx] = np.outer(p_out_channel, p_marg_nin).flatten(order="C")
-    p_prev = p0.copy()
-
-    # computing mismatch cost
-    PMCi = np.zeros(kwargs.mmc_iter)
-
-    tic = time.time()
-    for _n in range(kwargs.mmc_iter):
-        p1 = blockprobcompute(p_prev, kwargs.sze, kwargs.kappa, dirargs.get("stochmat_dir"))
-
-        if (_n % 100 == 0):
-            print(f"Iter {_n} --> Total time elapse: {(time.time() - tic) / 60:.3f} min --> {np.sum(p1)}")
-
-        PMCi[_n] = np.sum(rel_entr(p_prev, q0)) - np.sum(rel_entr(p1, q1))
-        p_prev = p1.copy()
-        
-    filename_ = f"mmc_alpha_{alpha:.2f}_eps_{epsilon:.2f}.npz"
-    np.savez_compressed(os.path.join(dirargs.get('mmc_dir'), filename_), mmc = PMCi) 

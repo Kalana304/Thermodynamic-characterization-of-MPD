@@ -1,5 +1,4 @@
 import os
-import gc
 import time
 import shutil
 import pickle
@@ -12,7 +11,6 @@ from utils.helperfn import *
 from utils.argconfig import *
 from utils.decoderfn import *
 from utils.mismatchfn import *
-from utils.readalist import get_parity_check_alist
 
 def createtrj(y_patterns, kwargs):
     ctx = get_context("spawn")
@@ -86,8 +84,6 @@ def createstochmat(dirargs, kwargs):
 
     print(f"Update matrix ETA: {(time.time() - tic) / 60} min")
 
-    shutil.rmtree(dirargs.get("trans_dir"))
-
     row_prob_sum = normalizestochmap(kwargs.sze, kwargs.kappa, _path = dirargs.get("stochmat_dir"),
                                       _rowsum = None, _normalize = False)
     
@@ -121,8 +117,6 @@ def createstochmat(dirargs, kwargs):
     for im, transfile in enumerate(nspsubdirs_updates):
         update_matrix(os.path.join(dirargs.get("nsptrans_dir"), transfile), dirargs.get("nspmat_dir"))
     
-    shutil.rmtree(dirargs.get("nsptrans_dir"))
-
     row_prob_sum = normalizestochmap(kwargs.nspsze, kwargs.nspkappa, _path = dirargs.get("nspmat_dir"),
                                       _rowsum = None, _normalize = False)
     row_prob_sum = normalizestochmap(kwargs.nspsze, kwargs.nspkappa, _path = dirargs.get("nspmat_dir"),
@@ -130,8 +124,6 @@ def createstochmat(dirargs, kwargs):
 
     initstate_hash = np.array(list(init_dict.keys()))
     initstate_idx = np.sort(np.array([hash2idx[v] for v in initstate_hash])) # need to sort
-
-    shutil.rmtree(dirargs.get("trj_dir"))
 
     return initstate_idx, nsp_state2idx
 
@@ -190,7 +182,7 @@ if __name__ == "__main__":
         nsp_state2idx = pickle.load(open(os.path.join(args.savedir, 'stoch_maps/nsp_state2idx.pkl'), "rb"))
 
         _, hash2idx = pickle.load(open(os.path.join(args.savedir, 'stoch_maps/lookup_tables.pkl'), "rb")) 
-        init_dict = pickle.load(open(os.path.join(args.savedir, 'stoch_maps/initial.npz'), "rb"))
+        init_dict = pickle.load(open(os.path.join(args.savedir, 'stoch_maps/initial.pkl'), "rb"))
 
         initstate_hash = np.array(list(init_dict.keys()))
         initstate_idx = np.sort(np.array([hash2idx[v] for v in initstate_hash])) # need to sort
@@ -199,6 +191,10 @@ if __name__ == "__main__":
         args.nspsze = len(nsp_state2idx); args.nspkappa = min(args.submatsze, args.nspsze)
 
         del init_dict, hash2idx, initstate_hash
+
+    shutil.rmtree(dirargs.get("trans_dir"))
+    shutil.rmtree(dirargs.get("nsptrans_dir"))
+    shutil.rmtree(dirargs.get("trj_dir"))
 
     # ======================= MMC =======================
     if not is_done(args.savedir, "mmc"):    # checkpoint look: mmc valuation

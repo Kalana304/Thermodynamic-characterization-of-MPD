@@ -13,7 +13,7 @@ simulation:
 
   eps_start: 0.1
   eps_end: 1.0
-  eps_step: 0.05
+  eps_step: 0.1
 
   mmc_iter: 300
 
