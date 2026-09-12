@@ -1,4 +1,9 @@
-import os
+#################################################################################
+## Author       : Kalana G Abeywardena
+## Created on   : Nov 2025
+## Last edited  : Sept 2026
+## Purpose      : Reads parity check matrix in alist form (adopted from Anthony Ho)
+#################################################################################
 import numpy as np
 
 def get_parity_check_alist(alist_path):

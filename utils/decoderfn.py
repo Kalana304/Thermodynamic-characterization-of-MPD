@@ -1,3 +1,11 @@
+#################################################################################
+## Author       : Kalana G Abeywardena
+## Created on   : Nov 2025
+## Last edited  : Sept 2026
+## Purpose      : defines computations carried by main decoder machine to generate 
+##                trajectroy files for each possible erasure pattern it would get
+#################################################################################
+
 import os
 import gc
 import pickle
@@ -6,7 +14,7 @@ from itertools import product
 
 from utils.helperfn import msg_remap, ptrn2outstr
 
-## Global variabels
+## Global variabels (so workers have access to them easily than passing them as arguments)
 GLOB_H = None
 GLOB_VAR2EDGES = None
 GLOB_CHK2EDGES = None
@@ -23,6 +31,10 @@ MU0_STATES = None
 POW3 = None  
 
 def worker_init(args):
+    """
+        This function initializes the common parameters that will be utilized by
+        parallely running workers during the simulation.
+    """
     global GLOB_H, GLOB_VAR2EDGES, GLOB_CHK2EDGES
     global GLOB_NEDGES, GLOB_DCMAX, GLOB_DVMAX, GLOB_LMAX, GLOB_NPROG
     global GLOB_BARR, GLOB_SAVEDIR
@@ -116,11 +128,19 @@ def process_pattern(params):
 
 def initialize(mu0, _message_arr, var_to_edges, n):
     """
-        Initialize the message array (memory locations) with the initial edge messages and channel observations.
-        (Not the initialization of any comp. machines)
-        Here we consider the output from channel first initialize the memory. Then the main decoder machine reads 
-        the channel observations to intialize its input/output register to start the computation. For the 
-        simulation purposes, this will be called within the main decoder program.  
+        Initialize the message array (memory locations) with the initial edge messages and channel observations
+        (Not the initialization of any comp. machines). Here we consider the output from channel first initialize 
+        the memory. Then the main decoder machine reads the channel observations to intialize its input/output 
+        register to start the computation. For the simulation purposes, this will be called within the main decoder program.
+
+        args:
+            mu0 (numpy.array)           : channel output saved as channel observatiosn messages in memory
+            _message_arr (numpy.array)  : contiguous numpy array that represents a memory  
+            var_to_edges (list of list) : defines the mapping where the edge messages are located in the memory
+            n (int)                     : block size
+        
+        return:
+            _message_arr (numpy.array)  : initialized memory array
     """
     _message_arr[:n] = mu0.copy()
     for v in range(n):
@@ -131,7 +151,6 @@ def initialize(mu0, _message_arr, var_to_edges, n):
 def compute_chk_to_edge(chk_msg_reg, dc):
     """ 
         updates the messages to be sent by a chk node.
-        state space: (msg_in, msg_out, i, pc): 3^4 x 3^4 x 4 x 4
     """
     chk_msg_in = chk_msg_reg.copy()
     chk_msg_out = chk_msg_reg.copy()
@@ -143,7 +162,6 @@ def compute_chk_to_edge(chk_msg_reg, dc):
 def compute_var_to_edge(var_msg_reg, dv, mu0_v, wl):
     """ 
         updates the messages to be sent by a var node 
-        state space: (msg_in, msg_out, mu0_v, wl, i, pc): 3^3 x 3^3 x 3 x 2 x 3 x 4
     """
     chk_msg_in = var_msg_reg.copy()
     chk_msg_out = var_msg_reg.copy()
@@ -154,6 +172,28 @@ def compute_var_to_edge(var_msg_reg, dv, mu0_v, wl):
     return chk_msg_out
 
 def update_states(barr, c_hat, m_, mu0, chk_idx, var_idx, l, _s, _p, pc_, hvals, states, POW3):
+    """
+        Function to update the states and their hash values for each clock cycle.
+        
+        args:
+            barr (numpy.array)      : random values used to hash the state values
+            c_hat (numpy.array)     : input/output pattern that comes from channel and subsequently getting updated when decoding.
+            m_ (numpy.array)        : internal edge message register intialized by different random values.
+            mu0 (int)               : channel observation register intialized by different random values.
+            chk_idx (int)           : loop counter for check nodes
+            var_idx (int)           : loop counter for var nodes
+            l (int)                 : loop counter for message-passing iteration
+            _s (bool)               : success flag
+            _p (bool)               : progress flag
+            pc_ (int)               : program counter for the main decoder machine
+            hvals (list)            : a list to which hashvalues are appeneded to keep track of trajectories
+            states (list)           : a list to which the state values are appended
+            POW3 (str)              : power 3 for state encode
+        
+        return:
+            hvals (list)            : updated list of hash values
+            states (list)           : updated list of state values
+    """
     n = len(c_hat)
     m_reg_len = len(m_)
     vm = 3**np.arange(m_reg_len)
@@ -170,17 +210,39 @@ def update_states(barr, c_hat, m_, mu0, chk_idx, var_idx, l, _s, _p, pc_, hvals,
     return hvals, states
 
 def gallager_bec_decoder(H, barr, y, mu0, m_reg, l_max, message_arr, check_to_edges, var_to_edges, POW3 = None):
-    m, n = H.shape
-    y_hat = y.copy()
-    mu0 = mu0.copy() 
-    marr = m_reg.copy()
-    l, c, v, _success, _progress = 0, 0, 0, 0, 1
-    message_arr = initialize(y_hat, message_arr, var_to_edges, n) #initializing memory
+    """
+        This function implements the main decoder machine, whose input register gets intialized by the channel output
+        and invokes subroutines to update messages iteratively which interacting with the memory. This carries out 
+        control operations, information updates to resolve the pattern receieved, assuming the input and output reg 
+        are the same. 
+
+        args:
+            H (numpy.ndarry)                : parity-check matrix of size m x n
+            barr (numpy.array)              : random values used to hash the state values
+            y (numpy.array)                 : received erasure pattern from channel
+            mu0 (numpy.array)               : channel observation (randomly initialized)
+            m_reg (numpy.array)             : edge messages (randomly initialized)
+            l_max (int)                     : max. message passing iterations
+            message_arr (numpy.array)       : memory array (contains channel observation + edge messages)
+            check_to_edges (list of list)   : mapping of edge message neighbourhood for each check node
+            var_to_edges (list of list)     : mapping of edge message neighbourhood for each var node
+            POW3 (numpy.array)
+
+        return:
+            hvals (list)            : list of hash values of the visited states along the computation
+            states (list)           : list of state values of the visited states along the computation
+    """
+    m, n = H.shape          # parameters available to system (consider hardcoded)
+    y_hat = y.copy()        # initialize input register with channel output
+    mu0 = mu0.copy()        # random value to channel obs. reg initially
+    marr = m_reg.copy()     # random values to edge message reg. initially
+    l, c, v, _success, _progress = 0, 0, 0, 0, 1    # initialize loop counters, boolean flags
+    message_arr = initialize(y_hat, message_arr, var_to_edges, n) # initializing memory (could have been initialized beforehand)
     
     pc_main = 0
     hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, [], [], POW3)
 
-    for l in range(1, l_max + 1):
+    for l in range(1, l_max + 1):   # start of the message-passing iterations
         pc_main = 1
         hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 
@@ -193,44 +255,44 @@ def gallager_bec_decoder(H, barr, y, mu0, m_reg, l_max, message_arr, check_to_ed
         wl = 1 if l == 1 else 2; pc_main = 4
         hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 
-        for c in range(1, m + 1):
+        for c in range(1, m + 1):   # looping over check nodes (follows a flooded schedule, but sequentially executed)
             pc_main = 5
             hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 
             nbrs = check_to_edges[c - 1]; dc = len(nbrs); pc_main = 6
             hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 
-            marr[ : dc] = message_arr[nbrs]; pc_main = 7
+            marr[ : dc] = message_arr[nbrs]; pc_main = 7        # reads local messages from memory that come from variable nodes
             hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 
-            marr = compute_chk_to_edge(marr, dc); pc_main = 8
+            marr = compute_chk_to_edge(marr, dc); pc_main = 8   # updates the local messages to be sent to variable nodes
             hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 
-            message_arr[nbrs] = marr[ : dc].copy(); pc_main = 9
+            message_arr[nbrs] = marr[ : dc].copy(); pc_main = 9 # write the updated local messages to the memory
             hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
         
         pc_main = 10 
         hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
-        for v in range(1, n + 1):
+        for v in range(1, n + 1):   # looping over variable nodes (follows a flooded schedule, but sequentially executed)
             pc_main = 11
             hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 
             _progress = 0; pc_main = 12
             hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 
-            nbrs = var_to_edges[v - 1]; dv = len(nbrs); pc_main = 13
+            nbrs = var_to_edges[v - 1]; dv = len(nbrs); pc_main = 13    
             hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 
-            marr[ : dv] = message_arr[nbrs]; pc_main = 14
+            marr[ : dv] = message_arr[nbrs]; pc_main = 14       # reads local messages from memory that come from check nodes
             hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 
-            mu0 = message_arr[v - 1 : v]; pc_main = 15
+            mu0 = message_arr[v - 1 : v]; pc_main = 15          # reads channel observation from memory that originally came from channel
             hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
             
-            tmp = np.sign(wl * mu0 + np.sum(marr[ : dv])); pc_main = 16
+            tmp = np.sign(wl * mu0 + np.sum(marr[ : dv])); pc_main = 16     # resolves the v-th symbol of the received pattern (consider all input messages)
             hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 
-            if tmp != y_hat[v - 1]:
+            if tmp != y_hat[v - 1]:     # if the resolved value is different from what we have, update the register!!
                 pc_main = 17
                 hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 
@@ -240,10 +302,10 @@ def gallager_bec_decoder(H, barr, y, mu0, m_reg, l_max, message_arr, check_to_ed
                 _progress = 1; pc_main = 19
                 hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
             
-            marr = compute_var_to_edge(marr, dv, mu0, wl); pc_main = 20
+            marr = compute_var_to_edge(marr, dv, mu0, wl); pc_main = 20     # updates the local messages to be sent to check nodes
             hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 
-            message_arr[nbrs] = marr[ : dv].copy(); pc_main = 21
+            message_arr[nbrs] = marr[ : dv].copy(); pc_main = 21            # write the updated local messages to the memory
             hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 
         pc_main = 22
@@ -252,7 +314,7 @@ def gallager_bec_decoder(H, barr, y, mu0, m_reg, l_max, message_arr, check_to_ed
     pc_main = 23
     hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 
-    if (0 not in y_hat) and (np.all(msg_remap(y_hat) @ H.T % 2 == 0)):
+    if (0 not in y_hat) and (np.all(msg_remap(y_hat) @ H.T % 2 == 0)):  # update success flag based on whether the decoder has failed or not (not based on correct codeword)
         pc_main = 24
         hvals, states = update_states(barr, y_hat, marr, mu0, c, v, l, _success, _progress, pc_main, hvals, states, POW3)
 

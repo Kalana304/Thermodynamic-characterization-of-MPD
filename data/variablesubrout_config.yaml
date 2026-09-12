@@ -6,7 +6,7 @@ decoder:
   nprog: 3
 
 simulation:
-  mmc_iter: 30
+  mmc_iter: 10
 
 system:
   rootdir: results

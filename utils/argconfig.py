@@ -1,8 +1,14 @@
+#################################################################################
+## Author       : Kalana G Abeywardena
+## Created on   : Nov 2025
+## Last edited  : Sept 2026
+## Purpose      : defines a argparser class + update using YAML + augment
+#################################################################################
+
 import os
 import yaml
 import pickle
 import argparse
-import subprocess
 import numpy as np
 
 from utils.readalist import get_parity_check_alist
@@ -10,8 +16,12 @@ from utils.helperfn import *
 
 class Range:
     def __init__(self, low, high):
-        self.low = low
-        self.high = high
+        """
+            This class is to check whether certain argument are within a prescribed
+            range that is valid for the simulations.
+        """
+        self.low = low      # sets the lower limit
+        self.high = high    # sets the upper limit
 
     def __call__(self, x):
         x = float(x)
@@ -22,14 +32,12 @@ class Range:
         return x
     
 class ArgumentParser(argparse.ArgumentParser):
-    """
-        This class sets up the argument parser for the simulator with YAML config support. 
-        The priority is given in the following order:
-            CLI args --> YAML config args --> default args
-    """
     def __init__(self, config=None, *args, **kargs,):
         ''' 
-            Initialization of the class. Passes config file path 
+            This class augments the original ArgumentParser class, to include the functionality to 
+            update the argument values using a user-defined YAML configuration file. The priority of
+            arguments will be set in the following order:
+                CLI arg > YAML arg > default arg 
         '''
         super().__init__(*args,**kargs)
 
@@ -40,7 +48,7 @@ class ArgumentParser(argparse.ArgumentParser):
 
             try:
                 with open(config, "r") as f:
-                    self.parms = yaml.safe_load(f) or {}
+                    self.parms = yaml.safe_load(f) or {}        # opens the user-defined configuration file
             except yaml.YAMLError as e:
                 raise ValueError(f"Invalid YAML in config file: {config}\n{e}")
         return
@@ -85,7 +93,17 @@ class ArgumentParser(argparse.ArgumentParser):
         return found
 
 def parse_opt(cfg_file=None):
-    parser = ArgumentParser(prog='mismatch cost', config=cfg_file)
+    """
+        This function initiate and adds arguments, their default values that will be used for the
+        simulation.
+
+        args:
+            cfg_file (str)  : path to external configuration file
+        
+        return:
+            args            : arguments and values
+    """
+    parser = ArgumentParser(prog='mismatch cost', config=cfg_file)  # uses redefined ArgumentParser class
 
     # ---------------- BASIC ARGS ----------------
     parser.add_argument("--parityfile", type=str, default="data/hamming_7x3.alist")
@@ -96,6 +114,7 @@ def parse_opt(cfg_file=None):
     parser.add_argument("--flushsze", type=int, default=500)
     parser.add_argument("--rootdir", type=str, default="results")
 
+    # Specific to periodic machines, and pmmc computations
     parser.add_argument("--lmax", type=int, default=3)
     parser.add_argument("--nprog", type=int, default=26)
     parser.add_argument("--submatsze", type=int, default=3**11)
@@ -110,13 +129,26 @@ def parse_opt(cfg_file=None):
 
     parser.add_argument("--mmc_iter", type=int, default=300)
 
-    parser.add_argument("--optq0", type=bool, default=False)
+    # Specific to finding optimal prior for a given f(x) function
+    parser.add_argument("--optq0", action="store_true", default=False)
+    parser.add_argument("--T0", type=float, default=1.0)
+    parser.add_argument("--s0", type=float, default=0.99)
+    parser.add_argument("--gamma", type=float, default=0.999)
     parser.add_argument("--opt_iter", type=int, default=500000)
+
+    # Sepcific to conditional input distribution
+    parser.add_argument("--condpin", action="store_true", default=False)
+    parser.add_argument("--erasecat", type=str, default=None, choices=["codeword", "correctable", "uncorrectable"])
   
-    args = parser.parse_args()
+    args = parser.parse_args()  # when called, invokes set_yaml_defaults() method in the newly defined class
     return args
 
 def augment_args(args):
+    """
+        Using the initiated arguments in parse_opt(), this function adds additional arguments and value pairs
+        which will be used throughout the simulation. These can only be setup, AFTER the initial arguments are 
+        setup either from default values or from the YAML config file.
+    """
     rng = np.random.RandomState(args.seed)
 
     # --- load code ---
@@ -149,8 +181,10 @@ def augment_args(args):
 
     elif "check" in args.simname:
         args.statelen = 2 * args.dmax + 2 
+        args.POW3 = 3 ** np.arange(args.dmax, dtype=object)
     else:
         args.statelen = 2 * args.dmax + 4    
+        args.POW3 = 3 ** np.arange(args.dmax, dtype=object)
 
     args.barr = np.arange(args.statelen) + rng.uniform(size=args.statelen)
 
@@ -178,6 +212,10 @@ def save_yaml(args, path):
     yaml.dump(args_to_dict(args), open(path, "w"))
 
 def init_directory(args):
+    """
+        This defines all the relevant directoy files, creates the directories, and saves useful 
+        parameters (main ones).
+    """
     dirargs = dict()
 
     args.savedir = dirargs["savedir"] = os.path.join(args.projroot, args.rootdir, args.simname)
@@ -187,9 +225,18 @@ def init_directory(args):
     dirargs['stochmat_dir'] = os.path.join(args.savedir, "stoch_maps/stochmatrix")
     dirargs['nsptrans_dir'] = os.path.join(args.savedir, "stoch_maps/nsp_transitions")
     dirargs['nspmat_dir'] = os.path.join(args.savedir, "stoch_maps/nsp_stochmatrix")
-    dirargs['mmc_dir'] = os.path.join(args.savedir, "mmc_results_optq0") if args.optq0 else os.path.join(args.savedir, "mmc_results")
 
-    createdir(**dirargs)
+    if args.optq0 and args.condpin:
+        _tempmmc = f"mmc_results_optq0_{args.erasecat}"
+    elif args.condpin and not args.optq0:
+        _tempmmc = f"mmc_results_{args.erasecat}"
+    elif not args.condpin and args.optq0:
+        _tempmmc = "mmc_results_optq0"
+    else:
+        _tempmmc = "mmc_results"
+    
+    dirargs['mmc_dir'] = os.path.join(args.savedir, _tempmmc) 
+    createdir(**dirargs)    # creates the directories
 
     PARAMS = {
                 "H": args.H,

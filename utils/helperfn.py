@@ -1,14 +1,38 @@
+#################################################################################
+## Author       : Kalana G Abeywardena
+## Created on   : Nov 2025
+## Last edited  : Sept 2026
+## Purpose      : defines some helper functions useful for other scripts
+#################################################################################
+
 import os
 import numpy as np
 from sympy import Matrix
-from itertools import product, islice
+from itertools import islice
 
 def msg_remap(x):
+    """
+        Simple remap of symbols that are useful for BEC. We interchange
+        0 <-> -1 depending on the required representation for logical bit 0
+        and erasures.
+    """
     xbar = x.copy()
     xbar[xbar < 0] = 0; xbar[x == 0] = -1
     return xbar
 
 def message_structure(H):
+    """
+        Defines the graph structure of the code considering its
+        Tanner graph.
+
+        args:
+            H (numpy.ndarray)   : parity check matrix of size m x n
+        
+        return:
+            var_to_edges (nested list)      : memory locations of edge messages for each var node
+            check_to_edges (nested list)    : memory locations of edge messages for each check node
+            n_edges                         : total no. of edges
+    """
     m, n = H.shape
 
     # Build edge list
@@ -24,45 +48,9 @@ def message_structure(H):
 
     return var_to_edges, check_to_edges, n_edges
 
-def erasure_sampler(codeword, smpsze, wt):
-    n = len(codeword)
-
-    if wt is None:
-        for _ in range(smpsze):
-            mask = np.random.rand(n) < 0.5
-            y = codeword.copy(); y[mask] = 0
-            yield y.astype(int)
-    else:
-        for _ in range(smpsze):
-            # uniformely sampling wt distance indices
-            mask = np.random.choice(n, size=wt, replace=False)
-            y = codeword.copy(); y[mask] = 0
-            yield y.astype(int)
-
-def find_nontrivial_codeword(H):
-    H_sym = Matrix(H.tolist())       # Convert to sympy Matrix
-    nullspace = H_sym.nullspace()    # List of basis vectors over rationals
-
-    if len(nullspace) == 0:
-        print("No non-trivial codeword exists (full rank).")
-        return None
-
-    codeword = np.array(nullspace[0]) % 2
-    codeword = codeword.reshape(1, -1)[0]
-    codeword[codeword == 0] = -1
-    return codeword.astype(int)
-
-def batcher(iterator, batch_size):
-    """Yield successive batches from an iterator."""
-    iterator = iter(iterator)
-    while True:
-        batch = list(islice(iterator, batch_size))
-        if not batch:
-            break
-        yield batch
-
 def ptrn2outstr(bits_np):
     # map bits to F3 symbols: -1/0/1 --> 0/2/1 (2 for erasures)
+    # use this representation as a file name to save trajectories
     symbval = bits_np.copy()
     symbval = msg_remap(symbval)
     symbval[symbval < 0] = 2
@@ -70,6 +58,7 @@ def ptrn2outstr(bits_np):
     return symbstr
 
 def outstr2ptrn(filepath):
+    # given a filename with a patetrn value embeded, extract the pattern
     symbstr = os.path.splitext(os.path.basename(filepath))[0]
     symbval = list(map(int, symbstr.split("_")[2]))
     symbval = np.array(symbval)
@@ -77,20 +66,6 @@ def outstr2ptrn(filepath):
     symbval[symbval == 2] = -1      # 0/1/2 --> 0/1/-1
     symbval = msg_remap(symbval)    # 0/1/-1 --> -1/1/0
     return symbval
-
-def nCr(n: int, r: int) -> int:
-    r = min(r, n - r)
-    return int(np.math.factorial(n) // (np.math.factorial(r) * np.math.factorial(n - r)))
-
-def capped_nCr(n, r, cap=4096):
-    r = min(r, n - r)  # symmetry
-    result = 1
-    
-    for k in range(1, r + 1):
-        result = result * (n - r + k) // k
-        if result > cap:
-            return cap  
-    return result
 
 def createdir(**kwargs):
     ## creating the directories

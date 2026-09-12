@@ -1,3 +1,9 @@
+#################################################################################
+## Author       : Kalana G Abeywardena
+## Created on   : Nov 2025
+## Last edited  : Sept 2026
+## Purpose      : runs the simulation for main decoder machine
+#################################################################################
 import os
 import time
 import shutil
@@ -13,6 +19,10 @@ from utils.decoderfn import *
 from utils.mismatchfn import *
 
 def createtrj(y_patterns, kwargs):
+    """
+        This fucntion calls the process_pattern() function to simulate main decoder machine
+        and save the trajectories for set of erasure patterns.
+    """
     ctx = get_context("spawn")
 
     t0 = time.time()
@@ -39,6 +49,10 @@ def createtrj(y_patterns, kwargs):
     print(f"Total time: {elapsed:.3f} min", flush=True)
 
 def createstochmat(dirargs, kwargs):
+    """
+        This function uses helper functions to define state space of the main decoder machine computation simulated, 
+        create the state transition matrix, and the relevant lookup tables (bijection mapping).
+    """
     # listing trajectory files
     errfiles = [
                     os.path.join(dirargs.get('trj_dir'), f)
@@ -127,18 +141,18 @@ def createstochmat(dirargs, kwargs):
 
     return initstate_idx, nsp_state2idx
 
-def runmmc(_initstate_idx, _nsp_state2idx, _codewords, dirargs, kwargs):
+def runmmc(_initstate_idx, _nsp_state2idx, _codewords, dirargs, kwargs, _erroridx = None):
     tic_ = time.time()
     with ProcessPoolExecutor(max_workers=kwargs.nworkers) as ex:
         for alpha in kwargs.alpha_arr:
             for eps in kwargs.eps_arr:
-                ex.submit(pmmc, alpha, eps, _initstate_idx, _nsp_state2idx, _codewords, dirargs, kwargs)
+                ex.submit(pmmc, alpha, eps, _initstate_idx, _nsp_state2idx, _codewords, dirargs, kwargs, _erroridx)
 
     elapsed_time = (time.time() - tic_) / 3600
     print(f"Elapsed time = {elapsed_time} hrs --> {elapsed_time / (len(kwargs.alpha_arr) * len(kwargs.eps_arr))} hrs per sim")
 
 if __name__ == "__main__":
-    args = parse_opt(cfg_file="data/maindecoder_config.yaml")   # set arguments
+    args = parse_opt(cfg_file="data/maindecoder_correcterase_config.yaml")   # set arguments
     args = augment_args(args)                                   # aux/augment arguments
     
     print(f"Edges={args.nedges} | dv_max = {args.dvmax} | dc_max = {args.dcmax}", flush=True)
@@ -205,13 +219,28 @@ if __name__ == "__main__":
     else:
         print("Skipping mmc (already done)")
 
-    if args.optq0 and  (not is_done(args.savedir, "mmc_optq0")):    # checkpoint look: mmc_optq0 valuation
-        print("++++++++ Running simulations mmc for optq0 ++++++++")
-        runmmc(initstate_idx, nsp_state2idx, ValidCodewords, dirargs, kwargs=args)
+    if args.condpin:
+        _, correraseIDX, uncorreraseIDX = pickle.load(open("./data/erasures_val2idx.pkl", "rb"))
+        print(f"erasure space sizes: correctable = {len(correraseIDX)} | uncorrectable = {len(uncorreraseIDX)}")
 
-        mark_done(args.savedir, "mmc_optq0")
-    else:
-        print("Skipping mmc for optq0 (already done)")
+        if args.erasecat == "correctable" and not is_done(args.savedir, "mmc_erorcorrect"):
+            print("++++++++ Running simulations mmc w/ correct. erasures. ++++++++")
+            runmmc(initstate_idx, nsp_state2idx, ValidCodewords, dirargs, kwargs=args, _erroridx=correraseIDX) # input support for corrrectable erasures
+
+        elif args.erasecat == "uncorrectable" and not is_done(args.savedir, "mmc_eroruncorrect"):
+            print("++++++++ Running simulations mmc w/ uncorrect. erasures. ++++++++")
+            runmmc(initstate_idx, nsp_state2idx, ValidCodewords, dirargs, kwargs=args, _erroridx=uncorreraseIDX) # input support for uncorrrectable erasures
+        else:
+            print("Skipping mmc w/ cond. input dist. (both are already done)")
+
+    if args.optq0:
+        if not is_done(args.savedir, "mmc_optq0"):    # checkpoint look: mmc_optq0 valuation
+            print("++++++++ Running simulations mmc for optq0 ++++++++")
+            runmmc(initstate_idx, nsp_state2idx, ValidCodewords, dirargs, kwargs=args)
+
+            mark_done(args.savedir, "mmc_optq0")
+        else:
+            print("Skipping mmc for optq0 (already done)")
 
     save_yaml(args, os.path.join(args.savedir, f"{args.simname}_updated.yaml"))
     print("++++++++++++++++++++ Finished simulations +++++++++++++++++++++++")
